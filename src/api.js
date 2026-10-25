@@ -98,6 +98,7 @@ function normalizeEvent(e) {
     id: e.id,
     date: e.date,
     state: type.state ?? 'pre', // pre | in | post
+    period: status.period ?? 0,
     detail: type.shortDetail ?? type.detail ?? '',
     completed: !!type.completed,
     neutral: !!comp.neutralSite,

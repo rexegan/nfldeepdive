@@ -4,6 +4,7 @@ import Scoreboard from './components/Scoreboard.jsx'
 import Standings from './components/Standings.jsx'
 import TeamCard from './components/TeamCard.jsx'
 import MyTeamsEditor from './components/MyTeamsEditor.jsx'
+import AlertBell, { AlertToasts } from './components/AlertBell.jsx'
 
 const VIEWS = [
   { id: '', label: 'Home' },
@@ -29,7 +30,9 @@ export default function App() {
             </a>
           ))}
         </nav>
+        <AlertBell />
       </header>
+      <AlertToasts />
 
       <main>
         {view === '' && <Home />}

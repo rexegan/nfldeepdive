@@ -1501,3 +1501,63 @@ table.standings .left {
   white-space: nowrap;
   flex-shrink: 0;
 }
+
+/* close-game alerts */
+.alert-bell {
+  position: relative;
+  margin-left: auto;
+}
+.alert-bell .btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.alert-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 30;
+  width: min(320px, 86vw);
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+.alert-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 14px;
+}
+.alert-toasts {
+  display: grid;
+  gap: 8px;
+  max-width: 1100px;
+  margin: 10px auto 0;
+  padding: 0 16px;
+}
+.alert-toast {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--live);
+  border-left-width: 4px;
+  border-radius: var(--radius);
+}
+.alert-toast > div {
+  display: grid;
+  gap: 2px;
+  font-size: 14px;
+}
+.tc-close-sm {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+}

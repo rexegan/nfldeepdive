@@ -8,6 +8,7 @@ One place to follow the NFL: live scores, weekly schedules, playoff-seed and div
 - **Yesterday's Upsets** on Scores: finished games where the betting underdog won (falls back to the latest game day this week).
 - **Team cards** with Roster (player profiles and stats), Fun Facts (franchise history, Super Bowl titles, major award winners, draft picks), Coaching Staff, and links to the team page and website.
 - **Follow divisions and conferences** (AFC, NFC, or any of the eight divisions) and filter Scores and Standings by them.
+- **Close-game alerts** (🔔 in the header): get notified when any game is within a field goal, one score, or 10 points in the 4th quarter or overtime. Works while the page is open.
 - **Follow teams** with the ☆ next to any team. Favorites are saved in your browser.
 
 Data comes from ESPN's public site API, called directly from the browser (no backend, no API key).
