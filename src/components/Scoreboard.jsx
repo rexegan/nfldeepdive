@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { fetchScoreboard } from '../api.js'
+import { DIVISIONS, divisionMembers, fetchScoreboard, withUpsets } from '../api.js'
 import { buildHash, useData, useFavorites } from '../hooks.js'
 import GameCard from './GameCard.jsx'
 import { EditTeamsButton } from './MyTeamsEditor.jsx'
@@ -14,15 +14,54 @@ const FILTERS = [
 
 const hasLive = (d) => d.events.some((e) => e.state === 'in')
 
+const toKey = (d) =>
+  `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+const dayName = (key) =>
+  new Date(+key.slice(0, 4), +key.slice(4, 6) - 1, +key.slice(6)).toLocaleDateString([], {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  })
+
+// Yesterday's finished games where the winner was the betting underdog. The NFL
+// rarely plays on a given weekday, so with no games yesterday it falls back to
+// the most recent game day this week.
+async function loadUpsets(o) {
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  let day = toKey(yesterday)
+  let board = await fetchScoreboard({ date: day }, o)
+  if (!board.events.some((g) => g.state === 'post')) {
+    const week = await fetchScoreboard({}, o)
+    const done = week.events.filter((g) => g.state === 'post')
+    if (done.length) {
+      day = done.map((g) => toKey(new Date(g.date))).sort().at(-1)
+      board = { ...week, events: done.filter((g) => toKey(new Date(g.date)) === day) }
+    }
+  }
+  const finals = board.events.filter((g) => g.state === 'post')
+  return { ...board, upsetDay: day, wasYesterday: day === toKey(yesterday), played: finals.length, events: await withUpsets(finals, o) }
+}
+
 export default function Scoreboard({ params }) {
-  const { week, st } = params
+  const { week, st, d: division } = params
+  const upsets = params.m === 'upsets'
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
   const { isFav, list: favList } = useFavorites()
 
   const { data, error, loading, updated, polling, refresh } = useData(
-    (o) => fetchScoreboard({ week, seasonType: st }, o),
-    [week, st],
+    async (o) => {
+      if (upsets) return loadUpsets(o)
+      const [board, members] = await Promise.all([
+        fetchScoreboard({ week, seasonType: st }, o),
+        division ? divisionMembers(division) : null,
+      ])
+      if (!members) return board
+      const inDiv = (t) => t && members.has(String(t.id))
+      return { ...board, events: board.events.filter((g) => inDiv(g.home) || inDiv(g.away)) }
+    },
+    [week, st, division, upsets],
     { shouldPoll: hasLive },
   )
 
@@ -56,6 +95,17 @@ export default function Scoreboard({ params }) {
   return (
     <section>
       <div className="toolbar">
+        <div className="seg">
+          <button className={!upsets ? 'on' : ''} onClick={() => go({ m: null })}>
+            By week
+          </button>
+          <button className={upsets ? 'on' : ''} onClick={() => go({ m: 'upsets', week: null, st: null })}>
+            Yesterday's Upsets
+          </button>
+        </div>
+      </div>
+
+      <div className="toolbar" style={upsets ? { display: 'none' } : undefined}>
         <div className="date-nav">
           <select
             aria-label="Week"
@@ -80,6 +130,14 @@ export default function Scoreboard({ params }) {
             </button>
           )}
         </div>
+        <select aria-label="Division" value={division ?? ''} onChange={(e) => go({ d: e.target.value || null })}>
+          <option value="">All teams</option>
+          {DIVISIONS.map((x) => (
+            <option key={x} value={x}>
+              {x}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="toolbar">
@@ -103,9 +161,23 @@ export default function Scoreboard({ params }) {
       {loading && <Loading label="Loading games…" />}
       {error && !data && <ErrorBox error={error} onRetry={refresh} />}
 
-      {data && !data.events.length && (
+      {upsets && data?.upsetDay && data.played > 0 && (
+        <p className="muted upset-head">
+          {data.wasYesterday ? 'Yesterday' : `No games yesterday, so showing ${dayName(data.upsetDay)}`}: {data.events.length} upset
+          {data.events.length === 1 ? '' : 's'} in {data.played} final{data.played === 1 ? '' : 's'}. An upset is a win by the
+          betting underdog.
+        </p>
+      )}
+
+      {upsets && data && !data.events.length && data.played > 0 && (
         <div className="state">
-          <p>No games this week.</p>
+          <p>No upsets. The favorites held serve.</p>
+        </div>
+      )}
+
+      {data && !data.events.length && !(upsets && data.played > 0) && (
+        <div className="state">
+          <p>No games {upsets ? 'yesterday' : division ? `for ${division} this week` : 'this week'}.</p>
           {data.seasonStart && new Date(data.seasonStart) > new Date() && (
             <p className="muted">
               Season starts {new Date(data.seasonStart).toLocaleDateString([], { month: 'long', day: 'numeric' })}.
@@ -136,7 +208,7 @@ export default function Scoreboard({ params }) {
           ),
       )}
 
-      {data?.byes.length > 0 && (
+      {!upsets && data?.byes.length > 0 && (
         <p className="muted sub">Bye week: {data.byes.map((t) => t.fullName).join(', ')}</p>
       )}
     </section>

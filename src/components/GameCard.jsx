@@ -55,6 +55,10 @@ export default function GameCard({ game }) {
         <span className="meta">
           {game.situation && game.state === 'in' ? (
             <strong>{game.situation}</strong>
+          ) : game.upset ? (
+            <strong>
+              Upset: {(game.home.winner ? game.home : game.away).name} won as {game.upset.spread ? `a ${game.upset.spread}-point` : 'the'} underdog
+            </strong>
           ) : (
             (game.state === 'pre' && game.odds?.spread ? `${game.odds.spread}${game.odds.total ? ` · O/U ${game.odds.total}` : ''}` : '') ||
             game.note ||

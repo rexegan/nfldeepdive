@@ -57,7 +57,12 @@ export function useData(load, deps, { pollMs = 30_000, shouldPoll } = {}) {
     return () => clearInterval(id)
   }, [polling, pollMs, run])
 
-  return { ...state, polling, refresh: () => run(true) }
+  const retry = () => {
+    setState((s) => ({ ...s, error: null, loading: !s.data }))
+    run(true)
+  }
+
+  return { ...state, polling, refresh: retry }
 }
 
 // ---------- favorite teams, kept in this browser ----------
@@ -83,11 +88,7 @@ export function useFavorites() {
     return () => listeners.delete(fn)
   }, [])
 
-  const toggle = useCallback((team) => {
-    const key = String(team.id)
-    const next = { ...favs }
-    if (next[key]) delete next[key]
-    else next[key] = { id: team.id, name: team.name, logo: team.logo }
+  const save = (next) => {
     favs = next
     try {
       localStorage.setItem(FAV_KEY, JSON.stringify(next))
@@ -95,8 +96,35 @@ export function useFavorites() {
       // storage blocked; favorites last for this visit only
     }
     listeners.forEach((fn) => fn())
+  }
+
+  const toggle = useCallback((team) => {
+    const key = String(team.id)
+    const next = { ...favs }
+    if (next[key]) delete next[key]
+    else next[key] = { id: team.id, name: team.name, logo: team.logo }
+    save(next)
+  }, [])
+
+  // Conferences and divisions share the store under a 'div:' prefix.
+  const toggleDiv = useCallback((label) => {
+    const key = `div:${label}`
+    const next = { ...favs }
+    if (next[key]) delete next[key]
+    else next[key] = { kind: 'div', id: label, label }
+    save(next)
   }, [])
 
   const isFav = useCallback((id) => !!favs[String(id)], [])
-  return { favorites: favs, list: Object.values(favs), isFav, toggle }
+  const isDivFav = useCallback((label) => !!favs[`div:${label}`], [])
+  const all = Object.values(favs)
+  return {
+    favorites: favs,
+    list: all.filter((f) => f.kind !== 'div'),
+    divisions: all.filter((f) => f.kind === 'div'),
+    isFav,
+    toggle,
+    isDivFav,
+    toggleDiv,
+  }
 }

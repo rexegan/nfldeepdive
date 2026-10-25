@@ -22,11 +22,14 @@ async function getJSON(url, { fresh = false } = {}) {
 
 // ---------- scoreboard ----------
 
-/** opts: { week, seasonType } (both optional = current week). */
+/** opts: { week, seasonType } (both optional = current week), or { date: 'YYYYMMDD' } for one day. */
 export async function fetchScoreboard(opts = {}, fetchOpts) {
   const q = new URLSearchParams({ limit: '100' })
-  if (opts.week) q.set('week', opts.week)
-  if (opts.seasonType) q.set('seasontype', opts.seasonType)
+  if (opts.date) q.set('dates', opts.date)
+  else {
+    if (opts.week) q.set('week', opts.week)
+    if (opts.seasonType) q.set('seasontype', opts.seasonType)
+  }
 
   const raw = await getJSON(`${SITE}/scoreboard?${q}`, fetchOpts)
   const league = raw.leagues?.[0] ?? {}
@@ -220,6 +223,13 @@ function normalizeStatCategories(raw) {
     .filter((c) => c.stats.length)
 }
 
+function recordFrom(games) {
+  const w = games.filter((g) => g.result === 'W').length
+  const l = games.filter((g) => g.result === 'L').length
+  const t = games.filter((g) => g.result === 'T').length
+  return games.length ? `${w}-${l}${t ? `-${t}` : ''}` : null
+}
+
 // ESPN's NFL /teams/{id} endpoint sends no CORS headers, so a browser can't read it;
 // the schedule payload carries the same team header (name, color, record, standing).
 export async function fetchTeam(id) {
@@ -227,8 +237,17 @@ export async function fetchTeam(id) {
   const [schedule, stats] = await Promise.allSettled([getJSON(`${base}/schedule`), getJSON(`${base}/statistics`)])
   if (schedule.status === 'rejected') throw schedule.reason
   const t = schedule.value.team ?? {}
+  const games = (schedule.value.events ?? []).map((e) => normalizeScheduleEvent(e, t.id ?? id))
+  const done = games.filter((g) => g.result)
+  const records = [
+    { type: 'total', label: 'Record', summary: t.recordSummary || recordFrom(done) },
+    { type: 'home', label: 'Home', summary: recordFrom(done.filter((g) => g.home && !g.neutral)) },
+    { type: 'away', label: 'Away', summary: recordFrom(done.filter((g) => !g.home && !g.neutral)) },
+    { type: 'neutral', label: 'Neutral', summary: recordFrom(done.filter((g) => g.neutral)) },
+  ].filter((r) => r.summary)
   return {
     id: t.id ?? id,
+    seasonYear: schedule.value.season?.year ?? null,
     name: t.displayName ?? t.name,
     short: t.name ?? t.location,
     nickname: t.name,
@@ -236,25 +255,265 @@ export async function fetchTeam(id) {
     color: t.color ? `#${t.color}` : null,
     logo: teamLogo(t),
     standing: t.standingSummary ?? '',
-    records: t.recordSummary ? [{ type: 'total', label: 'Record', summary: t.recordSummary }] : [],
+    records,
     link: t.clubhouse ?? null,
-    games: (schedule.value.events ?? []).map((e) => normalizeScheduleEvent(e, t.id ?? id)),
+    games,
     stats: stats.status === 'fulfilled' ? normalizeStatCategories(stats.value) : [],
   }
 }
 
 // ---------- team directory (for adding favorites) ----------
 
+// Built from standings, since ESPN's /teams list has no CORS headers either.
 export async function fetchTeams() {
-  const raw = await getJSON(`${SITE}/teams?limit=100`)
-  return (raw.sports?.[0]?.leagues?.[0]?.teams ?? [])
-    .map(({ team: t }) => ({
-      id: t.id,
-      name: t.shortDisplayName ?? t.location ?? t.displayName,
-      fullName: t.displayName,
-      abbr: t.abbreviation,
-      logo: teamLogo(t),
-    }))
-    .filter((t) => t.id)
+  const groups = await fetchStandings('divisions')
+  return groups
+    .flatMap((g) => g.entries.map((e) => ({ ...e.team, conference: g.name })))
     .sort((a, b) => a.fullName.localeCompare(b.fullName))
+}
+
+// ---------- divisions & conferences (for following) ----------
+
+export const DIVISIONS = [
+  'AFC',
+  'NFC',
+  'AFC East',
+  'AFC North',
+  'AFC South',
+  'AFC West',
+  'NFC East',
+  'NFC North',
+  'NFC South',
+  'NFC West',
+]
+
+/** Team ids in a conference ('AFC') or division ('AFC East'). */
+export async function divisionMembers(label) {
+  const groups = await fetchStandings('divisions')
+  return new Set(
+    groups.filter((g) => g.name === label || g.conference === label).flatMap((g) => g.entries.map((e) => String(e.team.id))),
+  )
+}
+
+// ---------- roster & players ----------
+
+const WEB = 'https://site.web.api.espn.com/apis/common/v3/sports/football/nfl'
+
+const experience = (years) => (years == null ? '' : years === 0 ? 'Rookie' : `${years} yr${years === 1 ? '' : 's'} pro`)
+
+function normalizePlayer(a) {
+  return {
+    id: a.id,
+    name: a.fullName ?? a.displayName,
+    jersey: a.jersey ?? '',
+    position: a.position?.abbreviation ?? '',
+    positionName: a.position?.displayName ?? a.position?.name ?? '',
+    headshot: a.headshot?.href ?? null,
+    height: a.displayHeight ?? '',
+    weight: a.displayWeight ?? '',
+    age: a.age ?? '',
+    year: experience(a.experience?.years),
+    college: a.college?.name ?? '',
+    hometown: [a.birthPlace?.city, a.birthPlace?.state ?? a.birthPlace?.country].filter(Boolean).join(', '),
+    status: a.status?.name && a.status.name !== 'Active' ? a.status.name : '',
+  }
+}
+
+const GROUP_LABEL = { offense: 'Offense', defense: 'Defense', specialTeam: 'Special Teams', specialteam: 'Special Teams' }
+
+/** Returns { groups: [{ label, players }], coach } with the roster split by unit. */
+export async function fetchRoster(teamId) {
+  const raw = await getJSON(`${SITE}/teams/${teamId}/roster`)
+  const athletes = raw.athletes ?? []
+  const groups = athletes.some((a) => Array.isArray(a.items))
+    ? athletes.map((g) => ({
+        label: GROUP_LABEL[g.position] ?? g.position ?? 'Players',
+        players: (g.items ?? []).map(normalizePlayer),
+      }))
+    : [{ label: 'Players', players: athletes.map(normalizePlayer) }]
+  const coach = raw.coach?.[0]
+  return {
+    groups: groups.filter((g) => g.players.length),
+    coach: coach ? [coach.firstName, coach.lastName].filter(Boolean).join(' ') : '',
+  }
+}
+
+function normalizeStatsTable(s) {
+  // overview.statistics: { labels, displayNames, splits: [{ displayName, stats: [...] }] }
+  if (!s?.labels?.length || !s.splits?.length) return null
+  return {
+    labels: s.labels,
+    names: s.displayNames ?? s.labels,
+    rows: s.splits.map((r) => ({ label: r.displayName, values: r.stats ?? [] })),
+  }
+}
+
+export async function fetchAthlete(id) {
+  const base = `${WEB}/athletes/${id}`
+  const [info, overview] = await Promise.allSettled([getJSON(base), getJSON(`${base}/overview`)])
+  if (info.status === 'rejected') throw info.reason
+  const a = info.value.athlete ?? {}
+  const ov = overview.status === 'fulfilled' ? overview.value : {}
+  return {
+    id: a.id ?? id,
+    name: a.displayName ?? a.fullName,
+    jersey: a.displayJersey ?? (a.jersey ? `#${a.jersey}` : ''),
+    position: a.position?.displayName ?? '',
+    headshot: a.headshot?.href ?? null,
+    height: a.displayHeight ?? '',
+    weight: a.displayWeight ?? '',
+    age: a.age ?? '',
+    year: a.displayExperience ?? experience(a.experience?.years),
+    college: a.college?.name ?? '',
+    draft: a.displayDraft ?? a.draft?.displayText ?? '',
+    hometown: a.displayBirthPlace ?? '',
+    team: a.team?.displayName ?? '',
+    status: a.status?.name && a.status.name !== 'Active' ? a.status.name : '',
+    link: a.links?.find((l) => l.rel?.includes('playercard'))?.href ?? a.links?.[0]?.href ?? null,
+    summary: a.statsSummary?.statistics?.length
+      ? {
+          title: a.statsSummary.displayName ?? 'Season stats',
+          stats: a.statsSummary.statistics.map((s) => ({
+            name: s.shortDisplayName ?? s.abbreviation ?? s.displayName,
+            full: s.displayName,
+            value: s.displayValue,
+            rank: s.rankDisplayValue ?? '',
+          })),
+        }
+      : null,
+    table: normalizeStatsTable(ov.statistics),
+    news: (ov.news ?? []).slice(0, 5).map((n) => ({
+      headline: n.headline,
+      link: n.links?.web?.href ?? null,
+      date: n.published ?? n.lastModified ?? null,
+    })),
+  }
+}
+
+/** Team website: ESPN doesn't publish it, so jump to the top search result. */
+export function teamSiteUrl(teamName) {
+  return `https://duckduckgo.com/?q=${encodeURIComponent(`\\${teamName} official website`)}`
+}
+
+// ---------- fun facts & coaches ----------
+
+const https = (url) => url?.replace(/^http:/, 'https:')
+
+// Super Bowl champions by franchise (ESPN abbreviations). The game year is the season + 1.
+const SUPER_BOWLS = [
+  ['I', 1966, 'GB'], ['II', 1967, 'GB'], ['III', 1968, 'NYJ'], ['IV', 1969, 'KC'], ['V', 1970, 'IND'],
+  ['VI', 1971, 'DAL'], ['VII', 1972, 'MIA'], ['VIII', 1973, 'MIA'], ['IX', 1974, 'PIT'], ['X', 1975, 'PIT'],
+  ['XI', 1976, 'LV'], ['XII', 1977, 'DAL'], ['XIII', 1978, 'PIT'], ['XIV', 1979, 'PIT'], ['XV', 1980, 'LV'],
+  ['XVI', 1981, 'SF'], ['XVII', 1982, 'WSH'], ['XVIII', 1983, 'LV'], ['XIX', 1984, 'SF'], ['XX', 1985, 'CHI'],
+  ['XXI', 1986, 'NYG'], ['XXII', 1987, 'WSH'], ['XXIII', 1988, 'SF'], ['XXIV', 1989, 'SF'], ['XXV', 1990, 'NYG'],
+  ['XXVI', 1991, 'WSH'], ['XXVII', 1992, 'DAL'], ['XXVIII', 1993, 'DAL'], ['XXIX', 1994, 'SF'], ['XXX', 1995, 'DAL'],
+  ['XXXI', 1996, 'GB'], ['XXXII', 1997, 'DEN'], ['XXXIII', 1998, 'DEN'], ['XXXIV', 1999, 'LAR'], ['XXXV', 2000, 'BAL'],
+  ['XXXVI', 2001, 'NE'], ['XXXVII', 2002, 'TB'], ['XXXVIII', 2003, 'NE'], ['XXXIX', 2004, 'NE'], ['XL', 2005, 'PIT'],
+  ['XLI', 2006, 'IND'], ['XLII', 2007, 'NYG'], ['XLIII', 2008, 'PIT'], ['XLIV', 2009, 'NO'], ['XLV', 2010, 'GB'],
+  ['XLVI', 2011, 'NYG'], ['XLVII', 2012, 'BAL'], ['XLVIII', 2013, 'SEA'], ['XLIX', 2014, 'NE'], ['50', 2015, 'DEN'],
+  ['LI', 2016, 'NE'], ['LII', 2017, 'PHI'], ['LIII', 2018, 'NE'], ['LIV', 2019, 'KC'], ['LV', 2020, 'TB'],
+  ['LVI', 2021, 'LAR'], ['LVII', 2022, 'KC'], ['LVIII', 2023, 'KC'], ['LIX', 2024, 'PHI'], ['LX', 2025, 'SEA'],
+]
+
+export const superBowlsFor = (abbr) =>
+  SUPER_BOWLS.filter(([, , a]) => a === abbr).map(([numeral, season]) => ({ numeral, season, year: season + 1 }))
+
+let factsPromise = null
+/** Awards and draft picks by NFL team id, built into the site at deploy time (scripts/build-data.mjs). */
+export function fetchFacts() {
+  factsPromise ??= fetch('./data/nfl.json')
+    .then((r) => (r.ok ? r.json() : { awards: {}, draft: {} }))
+    .catch(() => ({ awards: {}, draft: {} }))
+  return factsPromise
+}
+
+export async function factsFor(teamId) {
+  const { awards, draft } = await fetchFacts()
+  return {
+    awards: (awards[teamId] ?? []).map(([year, award, name]) => ({ year, award, name })),
+    picks: (draft[teamId] ?? []).map(([year, round, overall, name, pos, college]) => ({
+      year,
+      round,
+      overall,
+      name,
+      pos,
+      college,
+    })),
+  }
+}
+
+/** Wikipedia page summary (CORS-enabled REST API), or null. */
+export async function fetchWiki(title) {
+  try {
+    const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replaceAll(' ', '_'))}`)
+    if (!res.ok) return null
+    const w = await res.json()
+    if (w.type === 'disambiguation') return null
+    return {
+      title: w.title,
+      description: w.description ?? '',
+      extract: w.extract ?? '',
+      image: w.originalimage?.source ?? w.thumbnail?.source ?? null,
+      thumb: w.thumbnail?.source ?? null,
+      link: w.content_urls?.desktop?.page ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+const CORE_SPORTS = 'https://sports.core.api.espn.com/v2/sports/football/leagues/nfl'
+
+/** Head coach from ESPN's core API (the only coach ESPN publishes), plus a Wikipedia bio. */
+export async function fetchHeadCoach(teamId, seasonYear) {
+  const year = seasonYear ?? new Date().getFullYear()
+  const list = await getJSON(`${CORE_SPORTS}/seasons/${year}/teams/${teamId}/coaches`)
+  const ref = list.items?.[0]?.$ref
+  if (!ref) return null
+  const coach = await getJSON(https(ref))
+  const person = coach.person?.$ref ? await getJSON(https(coach.person.$ref)).catch(() => coach) : coach
+  const career = person.careerRecords?.[0]?.$ref
+    ? await getJSON(https(person.careerRecords[0].$ref)).catch(() => null)
+    : null
+  const seasonRecord = coach.records?.[0]?.record?.$ref
+    ? await getJSON(https(coach.records[0].record.$ref)).catch(() => null)
+    : null
+  const name = [person.firstName ?? coach.firstName, person.lastName ?? coach.lastName].filter(Boolean).join(' ')
+  const wiki = await fetchWiki(name)
+  return {
+    name,
+    seasons: person.coachSeasons?.length ?? null,
+    career: career?.summary ?? career?.displayValue ?? null,
+    season: seasonRecord?.summary ?? seasonRecord?.displayValue ?? null,
+    // Only trust the Wikipedia page if it's about a coach.
+    wiki: wiki && /coach/i.test(`${wiki.description} ${wiki.extract}`) ? wiki : null,
+  }
+}
+
+// ---------- upsets ----------
+
+/**
+ * Finished games where the winner was the betting underdog. ESPN drops odds from
+ * the scoreboard once a game ends, but the core API keeps them. Adds
+ * game.upset = { spread } (points the winner was getting, 0 for a pick'em).
+ */
+export async function withUpsets(events, fetchOpts) {
+  const done = events.filter((g) => g.state === 'post' && g.home && g.away)
+  const checked = await Promise.all(
+    done.map(async (g) => {
+      try {
+        const raw = await getJSON(`${CORE_SPORTS}/events/${g.id}/competitions/${g.id}/odds`, fetchOpts)
+        const odds = raw.items?.[0]
+        if (!odds) return null
+        const winner = g.home.winner ? 'home' : g.away.winner ? 'away' : null
+        if (!winner) return null
+        const side = odds[`${winner}TeamOdds`]
+        if (!side?.underdog) return null
+        return { ...g, upset: { spread: Math.abs(Number(odds.spread) || 0) } }
+      } catch {
+        return null
+      }
+    }),
+  )
+  return checked.filter(Boolean)
 }

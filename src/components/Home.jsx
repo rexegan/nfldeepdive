@@ -17,7 +17,7 @@ export default function Home() {
     [],
     { shouldPoll: anyLive },
   )
-  const { isFav, list: favs } = useFavorites()
+  const { isFav, list: favs, divisions } = useFavorites()
 
   if (loading) return <Loading label="Checking the scoreboard…" />
   if (error && !data) return <ErrorBox error={error} onRetry={refresh} />
@@ -67,6 +67,26 @@ export default function Home() {
           </>
         )}
       </section>
+
+      {divisions.length > 0 && (
+        <section className="home-block">
+          <div className="heading-row">
+            <h2>My Divisions</h2>
+            <EditTeamsButton />
+          </div>
+          <div className="conf-links">
+            {divisions.map((d) => (
+              <div key={d.id} className="conf-link">
+                <strong>{d.label}</strong>
+                <span className="conf-link-actions">
+                  <a href={buildHash('scores', { d: d.id })}>Scores</a>
+                  <a href={buildHash('standings', { d: d.id })}>Standings</a>
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {live.length > 0 && (
         <section className="home-block">

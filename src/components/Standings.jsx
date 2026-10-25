@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fetchStandings } from '../api.js'
+import { DIVISIONS, divisionMembers, fetchStandings } from '../api.js'
 import { buildHash, useData } from '../hooks.js'
 import { SearchBox, matchesTeam } from './Search.jsx'
 import TeamLogo from './TeamLogo.jsx'
@@ -13,12 +13,21 @@ const LEVELS = [
 
 export default function Standings({ params }) {
   const level = LEVELS.some((l) => l.id === params.level) ? params.level : 'divisions'
-  const { data, error, loading, refresh } = useData(() => fetchStandings(level), [level])
-  const [conf, setConf] = useState('all')
+  const division = params.d
+  const { data, error, loading, refresh } = useData(
+    async () => {
+      const [groups, members] = await Promise.all([fetchStandings(level), division ? divisionMembers(division) : null])
+      return members
+        ? groups
+            .map((g) => ({ ...g, entries: g.entries.filter((e) => members.has(String(e.team.id))) }))
+            .filter((g) => g.entries.length)
+        : groups
+    },
+    [level, division],
+  )
   const [query, setQuery] = useState('')
 
   const groups = (data ?? [])
-    .filter((g) => conf === 'all' || g.conference === conf)
     .map((g) => ({ ...g, entries: g.entries.filter((e) => matchesTeam(e.team, query)) }))
     .filter((g) => g.entries.length)
 
@@ -30,16 +39,23 @@ export default function Standings({ params }) {
             <button
               key={l.id}
               className={l.id === level ? 'on' : ''}
-              onClick={() => (window.location.hash = buildHash('standings', { level: l.id }))}
+              onClick={() => (window.location.hash = buildHash('standings', { ...params, level: l.id }))}
             >
               {l.label}
             </button>
           ))}
         </div>
-        <select aria-label="Conference" value={conf} onChange={(e) => setConf(e.target.value)}>
-          <option value="all">Both conferences</option>
-          <option value="AFC">AFC</option>
-          <option value="NFC">NFC</option>
+        <select
+          aria-label="Division"
+          value={division ?? ''}
+          onChange={(e) => (window.location.hash = buildHash('standings', { ...params, d: e.target.value || null }))}
+        >
+          <option value="">All teams</option>
+          {DIVISIONS.map((x) => (
+            <option key={x} value={x}>
+              {x}
+            </option>
+          ))}
         </select>
         <SearchBox value={query} onChange={setQuery} />
       </div>

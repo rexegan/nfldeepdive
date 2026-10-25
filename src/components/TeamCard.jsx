@@ -1,5 +1,8 @@
-import { useEffect } from 'react'
-import { fetchTeam } from '../api.js'
+import { useEffect, useState } from 'react'
+import { fetchTeam, teamSiteUrl } from '../api.js'
+import Roster, { PlayerView } from './Roster.jsx'
+import FunFacts from './FunFacts.jsx'
+import Coaches from './Coaches.jsx'
 import { useData, useFavorites } from '../hooks.js'
 import { closeTeam, useOpenTeam } from '../team.js'
 import TeamLogo from './TeamLogo.jsx'
@@ -30,6 +33,10 @@ function summarize(games) {
 function Body({ open }) {
   const { data: team, error, loading, refresh } = useData(() => fetchTeam(open.id), [open.id])
   const { isFav, toggle } = useFavorites()
+  const [tab, setTab] = useState('overview')
+  const [player, setPlayer] = useState(null)
+
+  if (player) return <PlayerView player={player} onBack={() => setPlayer(null)} />
 
   if (loading)
     return (
@@ -100,7 +107,37 @@ function Body({ open }) {
             <strong>{s.pointsAgainst}</strong>
           </div>
         )}
+        {team.link && (
+          <a className="tc-action" href={team.link} target="_blank" rel="noreferrer">
+            Full Team Page
+          </a>
+        )}
+        <a className="tc-action" href={teamSiteUrl(team.name)} target="_blank" rel="noreferrer">
+          Team Website
+        </a>
+        {[
+          ['roster', 'Roster'],
+          ['facts', 'Fun Facts'],
+          ['coaches', 'Coaching Staff'],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            className={`tc-action${tab === id ? ' on' : ''}`}
+            onClick={() => setTab(tab === id ? 'overview' : id)}
+          >
+            {tab === id ? `‹ ${label}` : label}
+          </button>
+        ))}
       </div>
+
+      {tab === 'roster' ? (
+        <Roster teamId={team.id} onPlayer={setPlayer} />
+      ) : tab === 'facts' ? (
+        <FunFacts team={team} />
+      ) : tab === 'coaches' ? (
+        <Coaches team={team} />
+      ) : (
+        <>
 
       {s.form.length > 0 && (
         <div className="tc-form">
@@ -167,12 +204,7 @@ function Body({ open }) {
         </details>
       ))}
 
-      {team.link && (
-        <p className="tc-foot">
-          <a href={team.link} target="_blank" rel="noreferrer" className="more">
-            Full team page on ESPN ↗
-          </a>
-        </p>
+        </>
       )}
     </>
   )
