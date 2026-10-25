@@ -1561,3 +1561,9 @@ table.standings .left {
   font-size: 20px;
   cursor: pointer;
 }
+
+.game-when {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}

@@ -2,9 +2,12 @@ import TeamLogo from './TeamLogo.jsx'
 import { useFavorites } from '../hooks.js'
 import TeamName from './TeamName.jsx'
 
-function startTime(iso) {
-  const d = new Date(iso)
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+// "Sun, Oct 26 · 1:00 PM" in the viewer's time zone; date only when the time isn't set yet.
+function kickoff(game) {
+  const d = new Date(game.date)
+  const day = d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
+  if (/TBD|TBA/i.test(game.detail)) return day
+  return `${day} · ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
 }
 
 function TeamRow({ team, game }) {
@@ -34,12 +37,7 @@ function TeamRow({ team, game }) {
 }
 
 export default function GameCard({ game }) {
-  const status =
-    game.state === 'pre'
-      ? /TBD|TBA/i.test(game.detail)
-        ? game.detail
-        : startTime(game.date)
-      : game.detail
+  const status = game.state === 'pre' ? 'Upcoming' : game.detail
   return (
     <article className={`game game-${game.state}`}>
       <header className="game-head">
@@ -49,6 +47,7 @@ export default function GameCard({ game }) {
         </span>
         {game.broadcast && <span className="tv">{game.broadcast}</span>}
       </header>
+      <div className="game-when">{kickoff(game)}</div>
       <TeamRow team={game.away} game={game} />
       <TeamRow team={game.home} game={game} />
       <footer className="game-foot">
