@@ -518,3 +518,162 @@ export async function withUpsets(events, fetchOpts) {
   )
   return checked.filter(Boolean)
 }
+
+// ---------- game detail ----------
+
+const signed = (n) => (n == null || Number.isNaN(Number(n)) ? '' : Number(n) > 0 ? `+${Number(n)}` : String(Number(n)))
+
+function normalizeLeader(l) {
+  const a = l?.athlete
+  if (!a) return null
+  return {
+    id: a.id,
+    name: a.shortName ?? a.displayName,
+    fullName: a.displayName,
+    position: a.position?.abbreviation ?? '',
+    jersey: a.jersey ?? '',
+    headshot: a.headshot?.href ?? null,
+    line: l.displayValue ?? '',
+    value: l.value ?? null,
+  }
+}
+
+function normalizeGameTeam(c) {
+  const t = c.team ?? {}
+  return {
+    id: t.id,
+    name: t.shortDisplayName ?? t.location ?? t.displayName,
+    fullName: t.displayName,
+    abbr: t.abbreviation,
+    logo: teamLogo(t),
+    color: t.color ? `#${t.color}` : null,
+    score: c.score ?? '',
+    winner: !!c.winner,
+    record: c.record?.find((r) => r.type === 'total')?.displayValue ?? c.record?.[0]?.displayValue ?? '',
+    homeAway: c.homeAway,
+  }
+}
+
+/** Everything ESPN's game summary has: leaders, scoring, drives, odds, team stats and box score. */
+export async function fetchGame(id, fetchOpts) {
+  const raw = await getJSON(`${SITE}/summary?event=${id}`, fetchOpts)
+  const comp = raw.header?.competitions?.[0] ?? {}
+  const type = comp.status?.type ?? {}
+  const competitors = (comp.competitors ?? []).map(normalizeGameTeam)
+  const home = competitors.find((c) => c.homeAway === 'home') ?? competitors[0]
+  const away = competitors.find((c) => c.homeAway === 'away') ?? competitors[1]
+  const byId = Object.fromEntries(competitors.map((c) => [c.id, c]))
+
+  // Leaders: one row per category with the away and home leader side by side.
+  const leaderRows = []
+  for (const side of raw.leaders ?? []) {
+    const who = byId[side.team?.id]?.homeAway
+    if (!who) continue
+    for (const cat of side.leaders ?? []) {
+      let row = leaderRows.find((r) => r.name === cat.name)
+      if (!row) leaderRows.push((row = { name: cat.name, label: cat.displayName, away: null, home: null }))
+      row[who] = normalizeLeader(cat.leaders?.[0])
+    }
+  }
+
+  const scoring = (raw.scoringPlays ?? []).map((p) => ({
+    id: p.id,
+    type: p.type?.text ?? '',
+    team: byId[p.team?.id] ?? null,
+    text: p.text,
+    period: p.period?.number,
+    clock: p.clock?.displayValue ?? '',
+    away: p.awayScore,
+    home: p.homeScore,
+  }))
+
+  const allDrives = [...(raw.drives?.previous ?? []), ...(raw.drives?.current ? [raw.drives.current] : [])]
+  const drives = allDrives
+    .map((d) => ({
+      id: d.id,
+      team: byId[d.team?.id] ?? null,
+      description: d.description ?? '',
+      result: d.displayResult ?? d.result ?? '',
+      isScore: !!d.isScore,
+      live: d === raw.drives?.current,
+      plays: (d.plays ?? []).map((p) => ({
+        id: p.id,
+        text: p.text,
+        period: p.period?.number,
+        clock: p.clock?.displayValue ?? '',
+        down: p.start?.shortDownDistanceText ?? '',
+        scoring: !!p.scoringPlay,
+      })),
+    }))
+    .reverse()
+
+  // Current down & distance, from the most recent play of the live drive.
+  const last = raw.drives?.current?.plays?.at(-1)
+  const situation = type.state === 'in' ? (last?.end?.downDistanceText ?? last?.start?.downDistanceText ?? '') : ''
+  const possession = type.state === 'in' ? (last?.start?.team?.id ?? raw.drives?.current?.team?.id ?? null) : null
+
+  const pick = raw.pickcenter?.[0]
+  const odds = pick
+    ? {
+        provider: pick.provider?.name ?? '',
+        details: pick.details ?? '',
+        total: pick.overUnder ?? null,
+        away: { spread: signed(pick.spread != null ? -pick.spread : null), moneyLine: signed(pick.awayTeamOdds?.moneyLine) },
+        home: { spread: signed(pick.spread), moneyLine: signed(pick.homeTeamOdds?.moneyLine) },
+      }
+    : null
+
+  const stats = (() => {
+    const [a, h] = ['away', 'home'].map((side) => raw.boxscore?.teams?.find((t) => t.homeAway === side)?.statistics ?? [])
+    const seen = new Set()
+    return (a.length ? a : h)
+      .map((s, i) => ({ label: s.label, away: a[i]?.displayValue ?? '', home: h[i]?.displayValue ?? '' }))
+      .filter((r) => r.label && !seen.has(r.label) && seen.add(r.label))
+  })()
+
+  const players = Object.fromEntries(
+    (raw.boxscore?.players ?? []).map((p) => [
+      byId[p.team?.id]?.homeAway ?? p.team?.id,
+      (p.statistics ?? []).map((c) => ({
+        name: c.name,
+        title: c.text ?? c.name,
+        labels: c.labels ?? [],
+        rows: (c.athletes ?? []).map((r) => ({
+          id: r.athlete?.id,
+          name: r.athlete?.displayName,
+          jersey: r.athlete?.jersey ?? '',
+          headshot: r.athlete?.headshot?.href ?? null,
+          stats: r.stats ?? [],
+        })),
+        totals: c.totals ?? [],
+      })),
+    ]),
+  )
+
+  const info = raw.gameInfo ?? {}
+  return {
+    id,
+    state: type.state ?? 'pre',
+    detail: type.shortDetail ?? type.detail ?? '',
+    description: type.description ?? '',
+    date: comp.date ?? null,
+    home,
+    away,
+    situation,
+    possession,
+    leaders: leaderRows,
+    scoring,
+    drives,
+    odds,
+    stats,
+    players,
+    venue: info.venue?.fullName ?? '',
+    city: [info.venue?.address?.city, info.venue?.address?.state].filter(Boolean).join(', '),
+    weather: info.weather
+      ? [info.weather.temperature != null && `${info.weather.temperature}°`, info.weather.conditionId].filter(Boolean).join(' · ')
+      : '',
+    attendance: info.attendance ?? null,
+    broadcast: (comp.broadcasts ?? []).flatMap((b) => b.media?.shortName ?? b.station ?? []).join(', '),
+    link: raw.header?.links?.find((l) => l.rel?.includes('summary'))?.href ?? null,
+  }
+}

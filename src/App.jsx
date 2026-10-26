@@ -3,6 +3,7 @@ import Home from './components/Home.jsx'
 import Scoreboard from './components/Scoreboard.jsx'
 import Standings from './components/Standings.jsx'
 import TeamCard from './components/TeamCard.jsx'
+import GameDetail from './components/GameDetail.jsx'
 import MyTeamsEditor from './components/MyTeamsEditor.jsx'
 import AlertBell, { AlertToasts } from './components/AlertBell.jsx'
 
@@ -40,6 +41,7 @@ export default function App() {
         {view === 'standings' && <Standings params={route.params} />}
       </main>
 
+      <GameDetail />
       <TeamCard />
       <MyTeamsEditor />
 

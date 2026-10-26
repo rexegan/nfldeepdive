@@ -41,3 +41,26 @@ export function useEditorOpen() {
   }, [])
   return open
 }
+
+// Which game's detail panel is open (opened by clicking a game card).
+let currentGame = null
+const gameListeners = new Set()
+
+export function openGame(game) {
+  currentGame = game
+  gameListeners.forEach((fn) => fn(currentGame))
+}
+
+export function closeGame() {
+  currentGame = null
+  gameListeners.forEach((fn) => fn(currentGame))
+}
+
+export function useOpenGame() {
+  const [game, setGame] = useState(currentGame)
+  useEffect(() => {
+    gameListeners.add(setGame)
+    return () => gameListeners.delete(setGame)
+  }, [])
+  return game
+}

@@ -2,7 +2,7 @@ import { fetchAthlete, fetchRoster } from '../api.js'
 import { useData } from '../hooks.js'
 import { ErrorBox, Loading } from './Status.jsx'
 
-function Headshot({ src, name, size = 48 }) {
+export function Headshot({ src, name, size = 48 }) {
   const initials = (name ?? '')
     .split(' ')
     .map((w) => w[0])
@@ -76,7 +76,7 @@ export function PlayerView({ player, onBack }) {
   return (
     <div className="player-view">
       <button className="link-btn back" onClick={onBack}>
-        ‹ Back to roster
+        ‹ Back
       </button>
       <div className="tc-head">
         <Headshot src={p.headshot} name={p.name} size={96} />
